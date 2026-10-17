@@ -29,7 +29,7 @@ in-tree `rtw88_8821cu` module, because both register the same USB IDs and the
 in-tree one cannot handle RFE 7:
 
 ```sh
-git clone https://github.com/<your-fork>/rtw88.git && cd rtw88
+git clone https://github.com/siamsamix/rtw88.git && cd rtw88
 sudo cp -r . /usr/src/rtw88-0.6          # name must match PACKAGE_NAME-VERSION in dkms.conf
 sudo dkms add rtw88/0.6
 sudo dkms install rtw88/0.6 -k "$(uname -r)"
@@ -146,30 +146,6 @@ sudo rm -rf /usr/src/rtw88-0.6 /etc/modprobe.d/rtw88-usb-dongles.conf
 - Other 8821CU revisions (RFE 0/2/4/6) are unaffected by this patch and keep
   using their existing definitions.
 
-## Reproducing / publishing this fork
-
-```sh
-git clone https://github.com/lwfinger/rtw88.git
-cd rtw88
-# apply the three-line patch above to rtw8821c.c
-git checkout -b rtw8821c-rfe7
-git commit -am "8821c: add RFE 7 definition for RTL8821CU USB adapters"
-git remote rename origin upstream
-git remote add origin git@github.com:<your-account>/rtw88.git
-git push -u origin rtw8821c-rfe7
-```
-
-## Please report upstream
-
-If this fixes your adapter, consider reporting it so the entry can be merged
-into lwfinger/rtw88 and eventually mainline, which would make this fork
-unnecessary:
-
-- Issue tracker: <https://github.com/lwfinger/rtw88/issues>
-- Mailing list: `linux-wireless@vger.kernel.org`
-
-Include your `lsusb` ID, the kernel version, and the `dmesg` output before and
-after the patch.
 
 ---
 # rtw88 downstream 🐧
