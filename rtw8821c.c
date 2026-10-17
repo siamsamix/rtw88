@@ -1951,6 +1951,9 @@ static const struct rtw_rfe_def rtw8821c_rfe_defs[] = {
 	[2] = RTW_DEF_RFE_EXT(8821c, 0, 0, 0, 2),
 	[4] = RTW_DEF_RFE_EXT(8821c, 0, 0, 0, 2),
 	[6] = RTW_DEF_RFE(8821c, 0, 0, 0),
+	/* some RTL8821CU USB adapters report RFE 7; coex code groups it with
+	 * RFE 2 (rfe_btg is set for 2/4/7), so reuse the RFE 2 definition */
+	[7] = RTW_DEF_RFE_EXT(8821c, 0, 0, 0, 2),
 };
 
 static const struct rtw_reg_domain coex_info_hw_regs_8821c[] = {

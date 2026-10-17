@@ -1,3 +1,177 @@
+# ⚠️ Fork note: RTL8821CU USB support (RFE type 7)
+
+This fork carries a **one-line addition** to `rtw8821c.c` so that RTL8821CU
+USB adapters that report **RFE type 7** in their efuse work. Without it,
+`rtw88`'s 8821c probe aborts and the adapter never gets a network interface.
+
+This section is a fork-local note. The upstream README starts below the
+horizontal rule at the end of this section.
+
+---
+
+## TL;DR
+
+```diff
+--- a/rtw8821c.c
++++ b/rtw8821c.c
+@@ -1951,6 +1951,9 @@ static const struct rtw_rfe_def rtw8821c_rfe_defs[] = {
+ 	[2] = RTW_DEF_RFE_EXT(8821c, 0, 0, 0, 2),
+ 	[4] = RTW_DEF_RFE_EXT(8821c, 0, 0, 0, 2),
+ 	[6] = RTW_DEF_RFE(8821c, 0, 0, 0),
++	/* some RTL8821CU USB adapters report RFE 7; coex code groups it with
++	 * RFE 2 (rfe_btg is set for 2/4/7), so reuse the RFE 2 definition */
++	[7] = RTW_DEF_RFE_EXT(8821c, 0, 0, 0, 2),
+ };
+```
+
+Build it with DKMS (`dkms.conf` is already in the tree) and blacklist the
+in-tree `rtw88_8821cu` module, because both register the same USB IDs and the
+in-tree one cannot handle RFE 7:
+
+```sh
+git clone https://github.com/<your-fork>/rtw88.git && cd rtw88
+sudo cp -r . /usr/src/rtw88-0.6          # name must match PACKAGE_NAME-VERSION in dkms.conf
+sudo dkms add rtw88/0.6
+sudo dkms install rtw88/0.6 -k "$(uname -r)"
+echo 'blacklist rtw88_8821cu' | sudo tee /etc/modprobe.d/rtw88-usb-dongles.conf
+sudo modprobe rtw_8821cu
+ip -br link                              # a new wlanX interface should appear
+```
+
+## Affected hardware
+
+- Realtek **RTL8821CU** USB adapters (AC600 class, dual-band) whose efuse
+  reports RFE type 7. Observed on USB ID `0bda:c811`; the same chip is also
+  sold as `7392:c811` (Edimax) and under various generic brands.
+- `lsusb` shows the adapter, but no driver binds and no `wlanX` is created.
+
+## Symptoms in `dmesg`
+
+```
+rtw88_8821cu 2-2.1:1.0: Firmware version 24.11.0, H2C version 12
+rtw88_8821cu 2-2.1:1.0: rfe 7 isn't supported
+rtw88_8821cu 2-2.1:1.0: failed to setup chip efuse info
+rtw88_8821cu 2-2.1:1.0: failed to setup chip information
+```
+
+The rfkill switch, firmware package and USB mode choices are all fine — the
+driver is simply rejecting the chip revision before it can continue.
+
+## Why the alternatives don't help
+
+- **Stock in-tree `rtw88` (any recent kernel) and upstream lwfinger `rtw88`
+  without this patch**: `rtw8821c_rfe_defs[]` only has entries for RFE 0, 2, 4
+  and 6, so the RFE 7 lookup fails exactly as above. The fork exists to add
+  that entry.
+- **Realtek vendor driver** (`morrownr/8821cu-20210916`, AUR
+  `rtl8821cu-morrownr-dkms-git`): does not compile on kernels that removed
+  `struct pppoe_tag` from `include/linux/if_pppox.h` (observed on 7.2):
+
+  ```
+  core/rtw_br_ext.c:1154:24: error: no member named 'tag_data' in 'struct pppoe_tag'
+  ```
+
+  Upstream master of that driver still uses the removed struct, and the AUR
+  package maintainer now recommends the in-kernel driver instead. It is not a
+  usable fallback on current kernels.
+
+## Why RFE 7 = RFE 2
+
+The driver already treats RFE 7 as equivalent to RFE 2 elsewhere:
+
+- `rtw8821c_read_efuse()` sets `hal->rfe_btg = true` for RFE values
+  2/4/7/10/12/15 (the BTG / "1-Ant, Main" front-end family).
+- `rtw8821c_coex_cfg_rfe_type()` groups cases 2, 7, 10 and 15 together.
+
+So RFE 7 reuses the RFE 2 definition, `RTW_DEF_RFE_EXT(8821c, 0, 0, 0, 2)`,
+which is how the chip is already handled in every other code path. This is a
+best-effort mapping of the TX power limit table; if you have Realtek
+documentation or efuse dumps for RFE 7, corrections are welcome.
+
+## Notes on module names
+
+- This fork's modules are named `rtw_8821cu`, `rtw_core`, `rtw_usb`, …
+  The in-tree kernel modules are named `rtw88_8821cu`, `rtw88_core`, …
+- DKMS installs into `/usr/lib/modules/$(uname -r)/updates/dkms/`, which
+  `depmod` ranks above the in-tree `kernel/` tree, so the fork's module wins
+  the modalias match.
+- Blacklisting `rtw88_8821cu` is still recommended: the in-tree module can
+  never work with RFE 7 hardware and would otherwise probe the device first
+  on some setups.
+
+## Verify it works
+
+```sh
+sudo dmesg | grep -i rtw_8821cu     # expect "Firmware version ..." and no "rfe 7 isn't supported"
+ip -br link                         # new wlanX present
+iw phy | grep -A1 'Band 2'          # 5 GHz band with VHT capabilities
+sudo iw dev wlanX scan | grep -E 'freq:|SSID:'
+```
+
+After associating, `iw dev wlanX link` should show a VHT rate (up to
+390 Mbps of MAC throughput on this AC600-class chip: 80 MHz, 1 spatial
+stream). Required firmware (`rtw8821c_fw.bin`, package `linux-firmware`) is
+the same one the in-tree driver uses — no extra firmware needed.
+
+## Kernel updates
+
+DKMS recompiles this module automatically on kernel upgrades via its install
+hook. If a future kernel changes an API the driver uses, the build will fail
+in the DKMS log; the fix is to rebase the fork on the latest upstream (or
+pull upstream into it), re-apply the three added lines above to
+`/usr/src/rtw88-0.6/rtw8821c.c`, and run:
+
+```sh
+sudo dkms install rtw88/0.6 -k "$(uname -r)"
+```
+
+## Undo / uninstall
+
+```sh
+sudo modprobe -r rtw_8821cu
+sudo dkms remove rtw88/0.6 --all
+sudo rm -rf /usr/src/rtw88-0.6 /etc/modprobe.d/rtw88-usb-dongles.conf
+```
+
+## Tested environment
+
+- CachyOS (Arch-based), kernel `7.2.8-1-cachyos`, dkms 3.4.3,
+  `linux-firmware` 20260916.
+- Hardware: generic RTL8821CU dongle, USB ID `0bda:c811`, efuse RFE 7.
+- Based on upstream commit `a56bcd2` ("8821a/8812a: Clear BIT_BT_PTA_EN only
+  for USB", 2026-05-21).
+- Verified: probe succeeds, firmware 24.11.0 loads, `wlan1` is created, the
+  radio scans both 2.4 GHz and 5 GHz, VHT capabilities advertise 390 Mbps RX
+  and TX, and the adapter associates with an 802.11ac access point at 5 GHz.
+- Other 8821CU revisions (RFE 0/2/4/6) are unaffected by this patch and keep
+  using their existing definitions.
+
+## Reproducing / publishing this fork
+
+```sh
+git clone https://github.com/lwfinger/rtw88.git
+cd rtw88
+# apply the three-line patch above to rtw8821c.c
+git checkout -b rtw8821c-rfe7
+git commit -am "8821c: add RFE 7 definition for RTL8821CU USB adapters"
+git remote rename origin upstream
+git remote add origin git@github.com:<your-account>/rtw88.git
+git push -u origin rtw8821c-rfe7
+```
+
+## Please report upstream
+
+If this fixes your adapter, consider reporting it so the entry can be merged
+into lwfinger/rtw88 and eventually mainline, which would make this fork
+unnecessary:
+
+- Issue tracker: <https://github.com/lwfinger/rtw88/issues>
+- Mailing list: `linux-wireless@vger.kernel.org`
+
+Include your `lsusb` ID, the kernel version, and the `dmesg` output before and
+after the patch.
+
+---
 # rtw88 downstream 🐧
 ### This is a downstream repo with a primary purpose of supporting development, testing and maintenance for the Realtek rtw88 series of WiFi 5 drivers in the Linux kernel.
 
